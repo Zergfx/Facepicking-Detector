@@ -1,35 +1,56 @@
 import React, { useRef, useEffect, useState } from 'react';
 import Webcam from 'react-webcam';
 import { FaceLandmarker, HandLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
-import useSound from 'use-sound'; // New import
-import alertSound from './alert.mp3'; // Import sound file
+import useSound from 'use-sound'; 
+import alertSound from './alert.mp3';
 
 const FacePickingDetector = () => {
   const webcamRef = useRef(null);
   const canvasRef = useRef(null);
   const [alert, setAlert] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [playAlert] = useSound(alertSound, { volume: 0.7 }); // Sound hook
   const faceLandmarkerRef = useRef(null);
   const handLandmarkerRef = useRef(null);
   const lastVideoTimeRef = useRef(-1);
   const animationRef = useRef(null);
+  const isMounted = useRef(true);
 
-  // Detection thresholds
-  const PICK_DISTANCE_THRESHOLD = 0.1; // Normalized screen distance
+
   const FACE_REGIONS = {
-    CHEEK: [123, 352], // Example face mesh indices
-    NOSE: [4, 6],
-    FOREHEAD: [10, 338]
+    CHEEK_INNER: [116, 123, 147, 352, 376, 433],
+    NOSE: [4, 6, 168, 49, 64, 97, 2],
+    MOUTH: [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291],
+    CHIN_CENTER: [200, 429, 436, 365, 397],
+    FOREHEAD_CENTER: [10, 151, 338],
+    NECK: [152, 148, 176, 150, 149, 176, 377, 400, 378, 379, 365, 397, 288, 435, 367],
+    EAR_LEFT: [234, 227, 93, 132, 58],
+    EAR_RIGHT: [454, 447, 356, 323, 288]
   };
 
+  const REGION_THRESHOLDS = {
+    CHEEK_INNER: 0.08,
+    NOSE: 0.07,
+    MOUTH: 0.07,
+    CHIN_CENTER: 0.07,
+    FOREHEAD_CENTER: 0.1,
+    NECK: 0.08,
+    EAR_LEFT: 0.07,
+    EAR_RIGHT: 0.07
+  };
+
+  const [playAlert, { stop }] = useSound(alertSound, { 
+    volume: 0.7,
+    interrupt: false
+  });
+  const lastPlayedRef = useRef(0);
+
+  
   useEffect(() => {
     const initializeModels = async () => {
       const vision = await FilesetResolver.forVisionTasks(
         "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm"
       );
       
-      // Initialize Face Landmarker
       faceLandmarkerRef.current = await FaceLandmarker.createFromOptions(
         vision,
         {
@@ -43,7 +64,6 @@ const FacePickingDetector = () => {
         }
       );
 
-      // Initialize Hand Landmarker
       handLandmarkerRef.current = await HandLandmarker.createFromOptions(
         vision,
         {
@@ -69,22 +89,30 @@ const FacePickingDetector = () => {
   }, []);
 
   const detect = async () => {
+    if (!isMounted.current) return;
+
     if (!webcamRef.current || !canvasRef.current) return;
-    
+  
+    if (!faceLandmarkerRef.current || !handLandmarkerRef.current) {
+      console.log('Models not initialized yet');
+      return;
+    }
     const video = webcamRef.current.video;
     if (video.currentTime === lastVideoTimeRef.current) {
       animationRef.current = requestAnimationFrame(detect);
       return;
     }
     
+    if (video.readyState < 2) {
+      animationRef.current = requestAnimationFrame(detect);
+      return;
+    }
+    
     lastVideoTimeRef.current = video.currentTime;
     
-    // Detect face landmarks
     const faceResults = faceLandmarkerRef.current.detectForVideo(video, Date.now());
-    // Detect hand landmarks
     const handResults = handLandmarkerRef.current.detectForVideo(video, Date.now());
 
-    // Draw results and check proximity
     drawLandmarks(faceResults, handResults);
     checkFacePicking(faceResults, handResults);
 
@@ -95,19 +123,21 @@ const FacePickingDetector = () => {
     const ctx = canvasRef.current.getContext('2d');
     ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
     
-    // Draw face landmarks
-    if (faceResults.faceLandmarks) {
-      faceResults.faceLandmarks.forEach(landmarks => {
-        landmarks.forEach((landmark, idx) => {
-          if (idx % 10 === 0) { // Draw every 10th landmark
-            drawPoint(ctx, landmark.x * canvasRef.current.width, 
-                      landmark.y * canvasRef.current.height, 2, 'green');
-          }
-        });
-      });
-    }
+    ctx.save();
+    ctx.scale(-1, 1); 
+    ctx.translate(-canvasRef.current.width, 0);
+    
+    // if (faceResults.faceLandmarks) {
+    //   faceResults.faceLandmarks.forEach(landmarks => {
+    //     landmarks.forEach((landmark, idx) => {
+    //       if (idx % 10 === 0) {
+    //         drawPoint(ctx, landmark.x * canvasRef.current.width, 
+    //                   landmark.y * canvasRef.current.height, 2, 'green');
+    //       }
+    //     });
+    //   });
+    // }
 
-    // Draw hand landmarks
     if (handResults.landmarks) {
       handResults.landmarks.forEach(landmarks => {
         landmarks.forEach(landmark => {
@@ -116,35 +146,40 @@ const FacePickingDetector = () => {
         });
       });
     }
+
+    ctx.restore(); 
   };
 
   const checkFacePicking = (faceResults, handResults) => {
-    if (!faceResults.faceLandmarks || !handResults.landmarks) return;
-
     let isPicking = false;
     
-    faceResults.faceLandmarks.forEach(face => {
-      handResults.landmarks.forEach(hand => {
+    faceResults.faceLandmarks?.forEach(face => {
+      handResults.landmarks?.forEach(hand => {
         const fingerTip = hand[8];
-        Object.values(FACE_REGIONS).forEach(region => {
-          region.forEach(faceIdx => {
+        Object.entries(FACE_REGIONS).forEach(([regionName, landmarks]) => {
+          landmarks.forEach(faceIdx => {
             const faceLandmark = face[faceIdx];
             const distance = calculateDistance(
               fingerTip.x, fingerTip.y,
               faceLandmark.x, faceLandmark.y
             );
             
-            if (distance < PICK_DISTANCE_THRESHOLD) {
+            if (distance < REGION_THRESHOLDS[regionName]) {
               isPicking = true;
             }
           });
         });
       });
     });
-
+  
     if (isPicking && !alert) {
-      playAlert(); // Trigger sound on new detection
+      const now = Date.now();
+      if (now - lastPlayedRef.current > 1000) {
+        playAlert();
+        lastPlayedRef.current = now;
+      }
     }
+  
     setAlert(isPicking);
   };
 
