@@ -198,7 +198,10 @@ const FacePickingDetector = () => {
   return (
     <div className="detector-container">
       {loading && <div className="loading">Initializing models...</div>}
-      
+      {!loading && <div className="warning-banner">
+        ⚠️ Allow camera access and keep this tab visible for detection to work.
+      </div>}
+
       <Webcam
         ref={webcamRef}
         mirrored
@@ -209,6 +212,7 @@ const FacePickingDetector = () => {
           marginRight: 'auto',
           left: 0,
           right: 0,
+          top: '60px',
           textAlign: 'center',
           zIndex: 9,
           width: 640,
@@ -224,6 +228,7 @@ const FacePickingDetector = () => {
           marginRight: 'auto',
           left: 0,
           right: 0,
+          top: '60px',
           textAlign: 'center',
           zIndex: 10,
           width: 640,
